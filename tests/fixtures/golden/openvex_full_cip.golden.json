@@ -1,0 +1,74 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://openvex.dev/docs/kernelvex/cip/v5.10.224-cip52/831c5301e4a8",
+  "author": "CIP Security Triage",
+  "role": "Automated Kernel CVE Triage Orchestrator",
+  "timestamp": "2026-11-15T12:00:00+00:00",
+  "version": 1,
+  "tooling": "kernelvex/0.1.0 (kernel-cve-triage@3aa04484d7b0, kmax==4.10)",
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2024-40901",
+        "description": "scsi: mpt3sas: Avoid test/set_bit() operating in non-allocated memory"
+      },
+      "products": [
+        {
+          "@id": "pkg:gitlab/cip-project/cip-kernel/linux-cip@v5.10.224-cip52?arch=x86_64&config=5.10.y-cip_x86_cip_merged_defconfig",
+          "identifiers": {
+            "purl": "pkg:gitlab/cip-project/cip-kernel/linux-cip@v5.10.224-cip52?arch=x86_64&config=5.10.y-cip_x86_cip_merged_defconfig"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "status_notes": "check_introduced_by_file_compiled: no file is compiled [objects: drivers/scsi/mpt3sas/mpt3sas_ctl.o(built=False, config=(CONFIG_SCSI_MPT3SAS))] [analysis_level=full]"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2024-40990",
+        "description": "RDMA/mlx5: Add check for srq max_sge attribute"
+      },
+      "products": [
+        {
+          "@id": "pkg:gitlab/cip-project/cip-kernel/linux-cip@v5.10.224-cip52?arch=x86_64&config=5.10.y-cip_x86_cip_merged_defconfig",
+          "identifiers": {
+            "purl": "pkg:gitlab/cip-project/cip-kernel/linux-cip@v5.10.224-cip52?arch=x86_64&config=5.10.y-cip_x86_cip_merged_defconfig"
+          }
+        }
+      ],
+      "status": "fixed",
+      "status_notes": "check_fixed_by: found ['7186b81c1f15e39069b1af172c6a951728ed3511'] [analysis_level=full]"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2024-44958",
+        "description": "sched/smt: Fix unbalance sched_smt_present dec/inc"
+      },
+      "products": [
+        {
+          "@id": "pkg:gitlab/cip-project/cip-kernel/linux-cip@v5.10.224-cip52?arch=x86_64&config=5.10.y-cip_x86_cip_merged_defconfig",
+          "identifiers": {
+            "purl": "pkg:gitlab/cip-project/cip-kernel/linux-cip@v5.10.224-cip52?arch=x86_64&config=5.10.y-cip_x86_cip_merged_defconfig"
+          }
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "check_ignore: no ignore; check_introduced_by: found c5511d03ec090980732e929c318a7a6374b5550e; check_introduced_by_file_compiled: at least one file is compiled [objects: kernel/sched/core.o(built=True, config=(True))]; check_fixed_by: fixed-by not found [analysis_level=full]"
+    }
+  ],
+  "meta": {
+    "analysis_level": "full",
+    "profile": "cip",
+    "stable_branch": "cip/5.10",
+    "kernel_version": "v5.10.224-cip52",
+    "kernel_arch": "x86_64",
+    "kernel_config_sha256": "e83c2a5880756cce589917aa23aeef783f11ecfc97fb7b34ee79a79362c67f58",
+    "sec_commit": "831c5301e4a829957117f47cfd7b388d99037a6a",
+    "kernel_source_commit": "a73978e16f87d704893e4b3a637be257420d43f3",
+    "tooling_pins": {
+      "kernel_cve_triage": "3aa04484d7b0e58331d3da4b2aef78376f23de55",
+      "kmax": "4.10"
+    }
+  }
+}

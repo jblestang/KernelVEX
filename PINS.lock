@@ -1,0 +1,18 @@
+# Pinned upstream OSS dependencies for kernelvex (CRA / reproducible CI builds)
+# Last verified: 2026-11-15
+
+CIP_KERNEL_SEC_URL="https://gitlab.com/cip-project/cip-kernel/cip-kernel-sec.git"
+CIP_KERNEL_SEC_DEFAULT_BRANCH="master"
+CIP_KERNEL_SEC_FIXTURE_COMMIT="831c5301e4a829957117f47cfd7b388d99037a6a"
+
+KERNEL_CVE_TRIAGE_URL="https://gitlab.com/cip-project/cip-kernel/kernel-cve-triage.git"
+KERNEL_CVE_TRIAGE_COMMIT="3aa04484d7b0e58331d3da4b2aef78376f23de55"
+
+KMAX_URL="https://github.com/paulgazz/kmax.git"
+KMAX_VERSION="4.10"
+KMAX_COMMIT="2880e6c99cecb828761e65e53cb9752cd74a8ada"
+
+SETUPTOOLS_BUILD_CONSTRAINT="setuptools<82"
+
+OPENVEX_CONTEXT="https://openvex.dev/ns/v0.2.0"
+OPENVEX_SCHEMA_URL="https://raw.githubusercontent.com/openvex/spec/main/openvex_json_schema.json"

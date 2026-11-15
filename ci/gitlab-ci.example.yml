@@ -1,0 +1,104 @@
+# Example GitLab CI integration for industrial CIP and standard Linux kernels.
+# Expects product build artifacts (effective .config and kernel git tree) and
+# persists /cache between pipeline runs to reuse cip-kernel-sec and kmax formulas.
+
+stages:
+  - security-vex
+
+variables:
+  KERNELVEX_IMAGE: "registry.example.com/security/kernelvex:0.1.0"
+  KERNELVEX_CACHE_DIR: "$CI_PROJECT_DIR/.cache/kernelvex"
+
+.kernelvex_base:
+  stage: security-vex
+  image:
+    name: "$KERNELVEX_IMAGE"
+    entrypoint: [""]
+  cache:
+    key: "kernelvex-${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .cache/kernelvex/
+  allow_failure:
+    exit_codes:
+      - 10  # Open triage (under_investigation remaining) reported without failing build
+
+# Profile 1: CIP SLTS kernel with compile-time kmax proof
+kernel-vex-cip-full:
+  extends: .kernelvex_base
+  variables:
+    KERNEL_VERSION: "v5.10.224-cip52"
+  script:
+    - mkdir -p vex
+    - |
+      kernelvex ci pipeline \
+        --cache-dir "$KERNELVEX_CACHE_DIR" \
+        --profile cip \
+        --kernel-version "${KERNEL_VERSION}" \
+        --kernel-config artifacts/.config \
+        --kernel-source "${CI_PROJECT_DIR}/linux-cip" \
+        --stable-branch cip/5.10 \
+        --mode full \
+        --cve-since-year 2024 \
+        --author "Product Security Team" \
+        --output vex/openvex-cip.json
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths:
+      - vex/openvex-cip.json
+
+# Profile 2: Standard upstream/stable Linux kernel without --cip flag
+kernel-vex-standard-full:
+  extends: .kernelvex_base
+  variables:
+    KERNEL_VERSION: "5.15.165"
+  script:
+    - mkdir -p vex
+    - |
+      kernelvex ci pipeline \
+        --cache-dir "$KERNELVEX_CACHE_DIR" \
+        --profile standard \
+        --kernel-version "${KERNEL_VERSION}" \
+        --kernel-config artifacts/.config \
+        --kernel-source "${CI_PROJECT_DIR}/linux-stable" \
+        --stable-branch stable/5.15 \
+        --mode full \
+        --cve-since-year 2024 \
+        --author "Product Security Team" \
+        --output vex/openvex-standard.json
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths:
+      - vex/openvex-standard.json
+
+# Strict release gate: exits 30 if any CVE remains under_investigation or affected
+kernel-vex-release-gate:
+  stage: security-vex
+  image:
+    name: "$KERNELVEX_IMAGE"
+    entrypoint: [""]
+  cache:
+    key: "kernelvex-${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .cache/kernelvex/
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - mkdir -p vex
+    - |
+      kernelvex ci pipeline \
+        --cache-dir "$KERNELVEX_CACHE_DIR" \
+        --profile cip \
+        --kernel-version "${KERNEL_VERSION}" \
+        --kernel-config artifacts/.config \
+        --kernel-source "${CI_PROJECT_DIR}/linux-cip" \
+        --stable-branch cip/5.10 \
+        --mode full \
+        --cve-since-year 2024 \
+        --fail-on under_investigation \
+        --output vex/openvex-release.json
+  artifacts:
+    when: always
+    paths:
+      - vex/openvex-release.json
