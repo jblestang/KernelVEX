@@ -503,8 +503,10 @@ def _patch_pre_fork_setup(ks_mod: Any, cache_mod: Any) -> None:
         def _wrapped_copy_cache(self: Any, src: pathlib.Path, dst: pathlib.Path | None) -> None:
             orig_copy_cache(self, src, dst)
             if dst and pathlib.Path(dst).is_file():
-                # Preload freshly generated kmax formulas when cache was cold.
-                get_or_load_kmax_index(dst)
+                # Preload freshly generated kmax formulas and alias the temp src path
+                # passed into Pool workers when cache was cold.
+                idx = get_or_load_kmax_index(dst)
+                _KMAX_INDICES[str(pathlib.Path(src).resolve())] = idx
 
         _wrapped_copy_cache._kernelvex_accel_patched = True  # type: ignore[attr-defined]
         cache_mod.CacheManager.copy_cache = _wrapped_copy_cache

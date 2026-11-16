@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -16,6 +17,8 @@ from kernelvex.catalog import refresh_catalog
 from kernelvex.cli import main
 from kernelvex.full import (
     _configure_kbuild_env,
+    _prepare_isolated_checkout,
+    _verify_checkout_complete,
     resolve_kmax_cache_file,
     run_enrich_wrapper,
     run_full_analysis,
@@ -439,3 +442,88 @@ def test_configure_kbuild_env_cross_arch_and_overrides(monkeypatch: pytest.Monke
     assert env_override["ARCH"] == "arm64"
     assert env_override["CROSS_COMPILE"] == "custom-gnu-"
     assert env_override["LLVM"] == "0"
+
+
+def _set_tree_writable(root: Path, writable: bool) -> None:
+    """Recursively strip or restore owner write permissions on ``root``."""
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        for name in filenames:
+            p = Path(dirpath) / name
+            mode = p.stat().st_mode
+            p.chmod((mode | stat.S_IWUSR) if writable else (mode & ~0o222))
+        for name in dirnames:
+            p = Path(dirpath) / name
+            mode = p.stat().st_mode
+            p.chmod((mode | stat.S_IWUSR) if writable else (mode & ~0o222))
+    root_mode = root.stat().st_mode
+    root.chmod((root_mode | stat.S_IWUSR) if writable else (root_mode & ~0o222))
+
+
+def test_prepare_isolated_checkout_readonly_blobless_promisor_and_offline_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify read-only bare blobless fallback propagates promisor remotes and fails closed."""
+    upstream = tmp_path / "upstream"
+    (upstream / "arch" / "x86").mkdir(parents=True)
+    (upstream / "Makefile").write_text("VERSION = 5\nPATCHLEVEL = 10\n", encoding="utf-8")
+    (upstream / "arch" / "x86" / "foo.c").write_text("int foo(void) { return 0; }\n")
+    subprocess.run(["git", "init", "-b", "main", str(upstream)], check=True, capture_output=True)
+    for cfg_key, cfg_val in (("user.email", "ci@example.org"), ("user.name", "CI")):
+        subprocess.run(
+            ["git", "-C", str(upstream), "config", cfg_key, cfg_val],
+            check=True,
+            capture_output=True,
+        )
+    subprocess.run(["git", "-C", str(upstream), "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(upstream), "commit", "-m", "init"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(upstream), "tag", "-a", "v5.10.224-cip52", "-m", "tag"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(upstream), "config", "uploadpack.allowFilter", "true"],
+        check=True,
+        capture_output=True,
+    )
+    sha = subprocess.check_output(
+        ["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    bare_partial = tmp_path / "linux-cip.git"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--bare",
+            "--filter=blob:none",
+            upstream.resolve().as_uri(),
+            str(bare_partial),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    _set_tree_writable(bare_partial, writable=False)
+    try:
+        wt1 = tmp_path / "wt1"
+        used_wt, checkout_dir = _prepare_isolated_checkout(bare_partial, sha, wt1)
+        assert used_wt is False
+        assert checkout_dir == wt1
+        assert (wt1 / "Makefile").read_text(encoding="utf-8").startswith("VERSION = 5")
+        assert (wt1 / "arch" / "x86" / "foo.c").is_file()
+
+        # When lazy fetches are disabled, incomplete blobless checkout must fail closed.
+        monkeypatch.setenv("GIT_NO_LAZY_FETCH", "1")
+        wt2 = tmp_path / "wt2"
+        with pytest.raises(KernelVexError, match="could not fetch|Incomplete kernel checkout"):
+            _prepare_isolated_checkout(bare_partial, sha, wt2)
+
+        # Defense-in-depth: missing tracked working-tree files trigger Incomplete checkout.
+        (wt1 / "Makefile").unlink()
+        with pytest.raises(KernelVexError, match="Incomplete kernel checkout"):
+            _verify_checkout_complete(wt1, sha)
+    finally:
+        _set_tree_writable(bare_partial, writable=True)

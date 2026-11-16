@@ -274,6 +274,108 @@ def resolve_kmax_cache_file(
     return resolved
 
 
+def _read_local_git_config(repo: Path, args: list[str]) -> str | None:
+    """Run ``git -C <repo> config --local ...`` and return stripped output or ``None``."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "config", "--local", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    val = proc.stdout.strip()
+    return val or None
+
+
+def _propagate_promisor_remotes(source_repo: Path, clone_dir: Path) -> None:
+    """Copy partial-clone promisor remote metadata into a shared local clone.
+
+    ``git clone --shared`` points ``origin`` to ``source_repo`` and drops any
+    ``remote.<name>.promisor`` settings, causing ``git checkout`` to fail silently
+    with ``unable to read sha1 file`` when ``source_repo`` is a ``--filter=blob:none``
+    partial clone mounted read-only. Restoring promisor remotes allows on-demand
+    blob fetching during checkout unless ``GIT_NO_LAZY_FETCH=1`` forbids it.
+    """
+    promisor_cfg = _read_local_git_config(source_repo, ["--get-regexp", r"^remote\..*\.promisor$"])
+    if promisor_cfg is None:
+        return
+
+    # Repository format version 1 is required for promisor / partialclone extensions.
+    _git_output(clone_dir, ["config", "core.repositoryformatversion", "1"])
+
+    partialclone_ext = _read_local_git_config(source_repo, ["--get", "extensions.partialclone"])
+    if partialclone_ext is not None:
+        _git_output(clone_dir, ["config", "extensions.partialclone", partialclone_ext])
+
+    for line in promisor_cfg.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2 or parts[1].strip().lower() != "true":
+            continue
+        key = parts[0]
+        if not (key.startswith("remote.") and key.endswith(".promisor")):
+            continue
+        remote_name = key[len("remote.") : -len(".promisor")]
+
+        remote_url = _read_local_git_config(source_repo, ["--get", f"remote.{remote_name}.url"])
+        if remote_url is None:
+            continue
+
+        # Replace local-path origin (or add named remote) so lazy fetches reach upstream.
+        exists_proc = subprocess.run(
+            ["git", "-C", str(clone_dir), "remote", "get-url", remote_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if exists_proc.returncode == 0:
+            _git_output(clone_dir, ["remote", "set-url", remote_name, remote_url])
+        else:
+            _git_output(clone_dir, ["remote", "add", remote_name, remote_url])
+
+        _git_output(clone_dir, ["config", f"remote.{remote_name}.promisor", "true"])
+
+        partial_filter = _read_local_git_config(
+            source_repo, ["--get", f"remote.{remote_name}.partialclonefilter"]
+        )
+        if partial_filter is not None:
+            _git_output(
+                clone_dir,
+                ["config", f"remote.{remote_name}.partialclonefilter", partial_filter],
+            )
+
+
+def _verify_checkout_complete(
+    wt_dir: Path, commit_sha: str, worktree_repo: Path | None = None
+) -> None:
+    """Verify no tracked files are missing after detached checkout (fail closed).
+
+    ``git checkout --detach`` can exit 0 even when missing partial-clone blobs leave
+    files deleted in the index/working tree (e.g., under ``GIT_NO_LAZY_FETCH=1``).
+    """
+    dirty = _git_output(wt_dir, ["status", "--porcelain", "--untracked-files=no"])
+    if dirty:
+        if worktree_repo is not None:
+            # Clean up registered worktree before aborting so source repo stays clean.
+            subprocess.run(
+                ["git", "-C", str(worktree_repo), "worktree", "remove", "--force", str(wt_dir)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            subprocess.run(
+                ["git", "-C", str(worktree_repo), "worktree", "prune"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        sample = "; ".join(dirty.splitlines()[:3])
+        raise KernelVexError(
+            f"Incomplete kernel checkout at {wt_dir} ({commit_sha[:12]}): "
+            f"missing tracked files ({sample})"
+        )
+
+
 def _prepare_isolated_checkout(
     kernel_source: Path, commit_sha: str, wt_dir: Path
 ) -> tuple[bool, Path]:
@@ -283,8 +385,7 @@ def _prepare_isolated_checkout(
     falls back to ``git clone --shared`` if ``kernel_source`` is mounted read-only
     in CI containers (e.g. ``-v /src:/sources:ro``), preventing source tree mutation.
     ``git clone --shared`` creates an alternates reference to ``kernel_source/.git/objects``
-    without duplicating packfiles, keeping cold setups under a second even for large
-    full Linux kernel clones.
+    without duplicating packfiles, and propagates promisor remotes for partial clones.
 
     Args:
         kernel_source: Original kernel git checkout path.
@@ -296,7 +397,7 @@ def _prepare_isolated_checkout(
         ``git worktree remove`` when a worktree was registered on the source repo.
 
     Raises:
-        KernelVexError: If both ``git worktree add`` and ``git clone --shared`` fail.
+        KernelVexError: If checkout creation fails or tracked blobs remain missing.
     """
     # Primary path: zero-copy detached worktree inside temporary scratch workspace.
     proc = subprocess.run(
@@ -306,6 +407,7 @@ def _prepare_isolated_checkout(
         check=False,
     )
     if proc.returncode == 0:
+        _verify_checkout_complete(wt_dir, commit_sha, worktree_repo=kernel_source)
         return (True, wt_dir)
 
     # Fall back to shared local clone when source mount is read-only or bare-locked.
@@ -319,8 +421,11 @@ def _prepare_isolated_checkout(
         detail = clone_proc.stderr.strip() or proc.stderr.strip()
         raise KernelVexError(f"Failed to prepare isolated kernel checkout at {wt_dir}: {detail}")
 
+    # Preserve partial-clone promisor remotes before checking out the detached tree.
+    _propagate_promisor_remotes(kernel_source, wt_dir)
     # Check out exact target SHA detached inside the writable clone before invoking make.
     _git_output(wt_dir, ["checkout", "--detach", commit_sha])
+    _verify_checkout_complete(wt_dir, commit_sha)
     return (False, wt_dir)
 
 

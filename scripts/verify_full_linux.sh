@@ -36,8 +36,10 @@ if [ "${OCI}" = "podman" ] && [ "$(podman info --format '{{.Host.Security.Rootle
 fi
 
 mkdir -p "${CACHE_HOST}" "${SRC_HOST}" "${OUT_HOST}"
-# Allow container UID 10001 to write cached formulas and reports across Docker/Podman bind mounts.
+# Allow container UID 10001 to write cached formulas and reports across Docker/Podman bind mounts,
+# including subdirectories restored by actions/cache under host runner UID.
 chmod 0777 "${CACHE_HOST}" "${OUT_HOST}"
+chmod -R a+rwX "${CACHE_HOST}" "${OUT_HOST}"
 
 echo "[1/6] Building OCI image ${IMAGE_TAG} using ${OCI}..."
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
@@ -70,6 +72,10 @@ elif ! git --git-dir="${SRC_HOST}/linux-stable.git" rev-parse --verify "v5.15.16
   git --git-dir="${SRC_HOST}/linux-stable.git" fetch --tags origin linux-5.15.y
 fi
 git --git-dir="${SRC_HOST}/linux-stable.git" describe --abbrev=0 "v5.15.165^{commit}" >/dev/null
+
+# Ensure non-read-only container runs on Linux Docker (UID 10001) can register
+# detached worktrees and persist lazily fetched blobs inside bare partial mirrors.
+chmod -R a+rwX "${SRC_HOST}/linux-cip.git" "${SRC_HOST}/linux-stable.git"
 
 run_pipeline_container() {
   local src_mount_opt="$1"
@@ -106,7 +112,12 @@ run_pipeline_container() {
   fi
 }
 
-echo "[5/6] Running CIP full triage (cold worktree + warm read-only :ro kmax run) on v5.10.224-cip52..."
+echo "[5/6] Running CIP full triage (worktree + warm read-only :ro kmax run) on v5.10.224-cip52..."
+if compgen -G "${CACHE_HOST}/kmax/cip-*.kmax" >/dev/null; then
+  CIP_PRE_CACHED=1
+else
+  CIP_PRE_CACHED=0
+fi
 run_pipeline_container "" "cip" "v5.10.224-cip52" \
   "/sources/cip-kernel-config/5.10.y-cip/x86/cip_merged_defconfig" \
   "/sources/linux-cip.git" "cip/5.10" "cip-cold.vex.json" "cip-cold.report.json"
@@ -125,7 +136,7 @@ cold_report = json.loads(Path("${OUT_HOST}/cip-cold.report.json").read_text())
 warm_report = json.loads(Path("${OUT_HOST}/cip-warm.report.json").read_text())
 vex = json.loads(Path("${OUT_HOST}/cip-warm.vex.json").read_text())
 
-assert cold_report["meta"]["kmax_cache_hit"] is False
+assert cold_report["meta"]["kmax_cache_hit"] is ("${CIP_PRE_CACHED}" == "1")
 assert warm_report["meta"]["kmax_cache_hit"] is True
 assert vex["meta"]["profile"] == "cip"
 by_cve = {s["vulnerability"]["name"]: s for s in vex["statements"]}
@@ -136,7 +147,12 @@ assert by_cve["CVE-2024-40990"]["status"] == "fixed"
 print(f"CIP full-mode assertions passed (cold={cold_report['meta']['elapsed_seconds']}s, warm={warm_report['meta']['elapsed_seconds']}s).")
 PY
 
-echo "[6/6] Running non-CIP standard full triage (cold worktree + warm read-only :ro kmax run) on 5.15.165..."
+echo "[6/6] Running non-CIP standard full triage (worktree + warm read-only :ro kmax run) on 5.15.165..."
+if compgen -G "${CACHE_HOST}/kmax/standard-*.kmax" >/dev/null; then
+  STD_PRE_CACHED=1
+else
+  STD_PRE_CACHED=0
+fi
 run_pipeline_container "" "standard" "5.15.165" \
   "/sources/cip-kernel-config/5.15.y/x86/cip_merged_defconfig" \
   "/sources/linux-stable.git" "stable/5.15" "standard-cold.vex.json" "standard-cold.report.json"
@@ -153,7 +169,7 @@ cold_report = json.loads(Path("${OUT_HOST}/standard-cold.report.json").read_text
 warm_report = json.loads(Path("${OUT_HOST}/standard-warm.report.json").read_text())
 vex = json.loads(Path("${OUT_HOST}/standard-warm.vex.json").read_text())
 
-assert cold_report["meta"]["kmax_cache_hit"] is False
+assert cold_report["meta"]["kmax_cache_hit"] is ("${STD_PRE_CACHED}" == "1")
 assert warm_report["meta"]["kmax_cache_hit"] is True
 assert vex["meta"]["profile"] == "standard"
 assert vex["meta"]["stable_branch"] == "stable/5.15"
